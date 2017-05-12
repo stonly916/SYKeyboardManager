@@ -29,7 +29,7 @@
 
 @interface SYKeyboardManager()<UIGestureRecognizerDelegate>
 
-@property(nonatomic, strong) UIWindow *keyWindow;
+@property(nonatomic, strong, readonly) UIWindow *keyWindow;
 
 - (void)adjustFrame;
 
@@ -66,8 +66,6 @@
     /*! Variable to save lastScrollView that was scrolled. */
     UIScrollView *lastScrollView;
     
-    UIScrollView *lastSuperScrollView;
-    
     /*! LastScrollView's initial contentOffset. */
     CGPoint startingContentOffset;
     
@@ -78,6 +76,8 @@
 }
 
 @synthesize enable                          = _enable;
+@synthesize keyWindow                       = _keyWindow;
+
 
 #pragma mark - Initializing functions
 
@@ -256,8 +256,7 @@
     
     //  We are unable to get textField object while keyboard showing on UIWebView's textField.
     if (_textFieldView == nil){
-        lastSuperScrollView.contentInset = lastContentInset;
-        lastSuperScrollView = nil;;
+        lastScrollView.contentInset = lastContentInset;
         lastScrollView = nil;
         
         startingContentOffset = CGPointZero;
@@ -283,8 +282,7 @@
     } completion:^(BOOL finished) {
     }];
     
-    lastSuperScrollView.contentInset = lastContentInset;
-    lastSuperScrollView = nil;;
+    lastScrollView.contentInset = lastContentInset;
     lastScrollView = nil;
     
     startingContentOffset = CGPointZero;
@@ -305,24 +303,17 @@
     //  Getting KeyWindow object.
     UIWindow *window = [self keyWindow];
 
-    
     //  Converting Rectangle according to window bounds.
     CGRect textFieldViewRect = [[_textFieldView superview] convertRect:_textFieldView.frame toView:window];
-    
     CGFloat shouldMove = CGRectGetMaxY(textFieldViewRect)-(CGRectGetHeight(window.frame)-kbSize.height);
-
     
     //  Getting it's superScrollView.
     UIScrollView *superScrollView = [_textFieldView superScrollView];
     
-    if (lastSuperScrollView) {
-        lastSuperScrollView.contentInset = lastContentInset;
-        lastSuperScrollView = nil;
-    }
-    
     //之前已有textFieldView处于 正开始编辑、或者编辑中，且在scrollView上
     if (lastScrollView) //还原之前textFieldView所做的自适应
     {
+        lastScrollView.contentInset = lastContentInset;
         //当前textFieldView不在scrollView中
         if (superScrollView == nil) {
             [lastScrollView setContentOffset:startingContentOffset animated:YES];
@@ -343,55 +334,51 @@
         lastScrollView = superScrollView;
         startingContentOffset = superScrollView.contentOffset;
     }
+    
     //当前lastScrollView = 当前处于编辑状态下的textFieldView
-    
-    
     {
         //  If we found lastScrollView then setting it's contentOffset to show textField.
         if (lastScrollView) {
-                UIScrollView *superScrollView = lastScrollView;
-                while (superScrollView && shouldMove > 0) {
+            UIScrollView *superScrollView = lastScrollView;
+            while (superScrollView) {
+                UIEdgeInsets inset = superScrollView.contentInset;
+                CGFloat maxOffset = superScrollView.contentSize.height + inset.bottom - superScrollView.frame.size.height;
+                CGFloat canOffset = MAX(0, maxOffset - superScrollView.contentOffset.y);
+                
+                shouldMove = MAX(0, shouldMove);
+                CGFloat offset = MIN(shouldMove, canOffset);
+                shouldMove -= offset;
+                
+                UIScrollView *lastView = [superScrollView superScrollView];
+                if (lastView == nil) {
+                    //需要设置superScrollView的contentInset
+                    CGRect superScrollViewRect = [superScrollView.superview convertRect:superScrollView.frame toView:window];
+                    //superScrollView底部应该设置的contentInset.bottom
+                    CGFloat shouldBottom = CGRectGetMaxY(superScrollViewRect)-(CGRectGetHeight(window.frame)-kbSize.height);
                     UIEdgeInsets inset = superScrollView.contentInset;
-                    if(shouldMove > 0) {
-                        CGFloat maxOffset = superScrollView.contentSize.height + inset.bottom - superScrollView.frame.size.height;
-                        CGFloat canOffset = MAX(0, maxOffset - superScrollView.contentOffset.y);
+                    lastContentInset = inset;
+                    if (shouldBottom > 0) {
+                        //重新设置superScrollView的contentInset
+                        superScrollView.contentInset = UIEdgeInsetsMake(inset.top, inset.left, inset.bottom + shouldBottom, inset.right);
                         
-                        CGFloat offset = MIN(shouldMove, canOffset);
-                        shouldMove -= offset;
-                        
-                        UIScrollView *lastView = [superScrollView superScrollView];
-                        if (shouldMove > 0) {
-                            
-                            if (lastView == nil) {
-                                //需要设置superScrollView的contentInset
-                                CGRect superScrollViewRect = [superScrollView.superview convertRect:superScrollView.frame toView:window];
-                                //superScrollView底部应该设置的contentInset.bottom
-                                CGFloat shouldBottom = CGRectGetMaxY(superScrollViewRect)-(CGRectGetHeight(window.frame)-kbSize.height);
-                                if (shouldBottom > 0) {
-                                    
-                                    UIEdgeInsets inset = superScrollView.contentInset;
-                                    lastContentInset = inset;
-                                    //重新设置superScrollView的contentInset
-                                    superScrollView.contentInset = UIEdgeInsetsMake(inset.top, inset.left, inset.bottom + shouldBottom, inset.right);
-                                    
-                                    lastSuperScrollView = superScrollView;
-                                }
-                                
-                                CGFloat shouldOffset = shouldMove;
-                                //在设置contentInset后，需要重新更新offset
-                                offset += shouldOffset;
-                                shouldMove -= shouldOffset;
-                            }
-                        }
-                        
-                        [UIView animateWithDuration:animationDuration delay:0 options:(animationCurve|UIViewAnimationOptionBeginFromCurrentState) animations:^{
-                            superScrollView.contentOffset = CGPointMake(superScrollView.contentOffset.x, superScrollView.contentOffset.y + offset);
-                        } completion:^(BOOL finished) {
-                        }];
-                        
-                        superScrollView = lastView;
+                        lastScrollView = superScrollView;
                     }
+                    
+                    CGFloat shouldOffset = shouldMove;
+                    //在设置contentInset后，需要重新更新offset
+                    offset += shouldOffset;
+                    shouldMove -= shouldOffset;
                 }
+                [UIView animateWithDuration:animationDuration delay:0 options:(UIViewAnimationOptionBeginFromCurrentState) animations:^{
+                    superScrollView.contentOffset = CGPointMake(superScrollView.contentOffset.x, superScrollView.contentOffset.y + offset);
+                } completion:^(BOOL finished) {
+                }];
+                
+                //大部分情况下使用这个交互更好，但是有时候会有点问题，比如同时调用contentOffset动画以及设置contentInset动画时
+//                [superScrollView setContentOffset:CGPointMake(superScrollView.contentOffset.x, superScrollView.contentOffset.y + offset) animated:YES];
+                
+                superScrollView = lastView;
+            }
             
         }
     }
